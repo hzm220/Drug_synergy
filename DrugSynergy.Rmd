@@ -1,0 +1,179 @@
+---
+title: "DrugSynergy_DND41"
+author: "Hui Mao"
+date: "5/18/2020"
+output: html_document
+---
+
+
+### Getting Started
+
+This R Markdown is used for analyzing drug combination dose–response data. The example dataset is "DND41_Isobologram.csv". There are 5 methods including: 
+
+*  Chou-Talalay method: CI.
+*  Loewe: the synergy score quantifies the excess over the expected response if the two drugs are the same compound.
+*  HSA: the synergy score quantifies the excess over the highest single drug response.
+*  Bliss: the expected response is a multiplicative effect as if the two drugs act independently.
+*  ZIP: Zero interaction potency model, the expected response corresponds to an additive effect as if the two drugs do not affect the potency of each other.
+
+Chou-Talalay method uses the code written by Julie, add dose–response curves for the single drugs, fitted by four-parameter logistic models and one isobologram.
+
+Loewe, HSA, Bliss and ZIP use the SynergyFinder R package to generate synergy scores and visualization for dose–response matrix data.
+
+
+```{r library}
+library(MASS)
+library(drc)
+library(readxl)
+library(ggplot2)
+library(readxl)
+library(synergyfinder)
+```
+
+### Chou-Talalay method
+
+
+```{r chou, echo=FALSE}
+x <- read.csv("/Users/Hui/Drug_synergy/DND41_Isobologram.csv", header = TRUE)
+x <- x[,1:7]
+x[,4:7] <- x[, 4:7] * 100
+
+combination.vib <- x[x[, 2] != 0 & x[,3] != 0, 7]
+
+A1.vib <- c(as.numeric(unlist(x[x[,2] == 0, 4])), 
+            as.numeric(unlist(x[x[,2] == 0, 5])), 
+            as.numeric(unlist(x[x[,2] == 0, 6])))/100
+A1.vib[A1.vib >1] <- 1
+A1.conc <- rep(as.numeric(as.character(unlist(x[x[,2] == 0, 3]))), 3)
+
+A2.vib <- c(as.numeric(unlist(x[x[,3] == 0, 4])), 
+             as.numeric(unlist(x[x[,3] == 0, 5])), 
+             as.numeric(unlist(x[x[,3] == 0, 6])))/100
+ 
+A2.vib[A2.vib > 1] <- 1
+A2.conc <- rep(as.numeric(as.character(unlist(x[x[,3] == 0, 2]))), 3)
+#Plot
+#A1: GSK4716
+G<- drm(A1.vib ~ A1.conc, fct = LL.4(names = c("Slope", "Lower Limit", "Upper Limit", "ED50")))
+ED(G, c(30, 50, 70), interval = "delta")
+modelFit(G)
+summary(G)
+plot(G, broken=TRUE, bp=1, ylab="Response",
+    xlab="GSK", bty="l", type = "all", xlim = c(0, 20000 ), ylim = c(-0.1, 1))
+
+#A2:Dexamethasone
+D<- drm(A2.vib ~ A2.conc, fct = LL.4(names = c("Slope", "Lower Limit", "Upper Limit", "ED50")))
+ED(D, c(30, 50, 70), interval = "delta")
+modelFit(D)
+summary(D)
+plot(D, broken=TRUE, bp=1, ylab="Response",
+     xlab="Dex", bty="l", type = "all", xlim = c(0, 1500 ), ylim = c(-0.1, 1))
+
+#### 3 parameters with lower bound 0 for ED50
+Fors.LL.3 <- drm(A1.vib ~ A1.conc, fct = LL.3())
+ED(Fors.LL.3, c(30, 50, 70), interval = "delta")
+##### DND4 — Kayleigh GSK4716
+Dex.LL.3 <- drm(A2.vib ~ A2.conc, fct = LL.3())
+ED(Dex.LL.3, c(20, 30, 50, 70, 80), interval = "delta")
+
+##### ##### DND4 — Kayleigh Dex
+Fors.dose <- ED(Fors.LL.3, (100 - combination.vib), interval = "delta")
+Dex.dose <- ED(Dex.LL.3, (100 - combination.vib), interval = "delta")
+
+
+isob.data <- cbind( Dex.dose = Dex.dose[,1], Fors.dose = Fors.dose[,1], comb.Dex.dose = x[x[,2] != 0 & x[,3] != 0, 2], comb.Fors.dose = x[x[,2] != 0 & x[,3] != 0, 3])
+
+isob.data <- transform(isob.data, CI= isob.data[,4]/isob.data[,2] + isob.data[,3] /isob.data[,1])
+
+isob.data <- transform(isob.data, normalized.comb.Fors.dose =  comb.Fors.dose / Fors.dose, normalized.comb.Dex.dose = comb.Dex.dose / Dex.dose)
+
+isob.data <- transform(isob.data, IC = gsub("e:1:", "",rownames(isob.data)))
+colnames(isob.data)
+colnames(isob.data) <- gsub("Fors", "GSK4716", colnames(isob.data))
+rownames(isob.data) <- gsub("e:1:", "",rownames(isob.data))
+
+#plot
+gg<-ggplot(isob.data, aes(x=normalized.comb.GSK4716.dose, y= normalized.comb.Dex.dose))
+gg1 <- gg + geom_point() + labs(title="Isobologram") + coord_fixed(ratio = 1)+ coord_cartesian(xlim=c(0,1.5), ylim=c(0, 1.5)) + geom_abline(intercept = 1, slope = -1, color="blue")
+gg1
+```
+
+
+### SynergyFinder
+Efficient implementations for all the popular synergy scoring models for drug combinations, including HSA, Loewe, Bliss and ZIP and visualization of the synergy scores as either a two-dimensional or a three-dimensional interaction surface over the dose matrix. 
+
+* Input data
+```{r sfmat, echo=FALSE}
+SFDND41 <- read_excel("SF_R_DND41.xlsx")
+head(SFDND41)   
+dim(SFDND41) 
+source("Reshape.R")
+dose.response.mat <- mReshapeData(SFDND41,
+                                 data.type = "viability",
+                                 impute = TRUE,
+                                 noise = TRUE,
+                                 correction = "part")
+
+str(dose.response.mat)
+PlotDoseResponse(dose.response.mat)
+```
+
+
+
+
+
+
+
+* Drug synergy scoring
+
+
+Given a reference model specified by the ‘Method’ parameter, an overall synergy score is calculated as the deviation of phenotypic responses compared to the expected values, averaged over the full dose–response matrix. 
+
+The synergy score for a drug combination is averaged over all the dose combination measurments.
+synergy maps highlight synergistic and antagonistic dose regions in red and green colors, respectively.
+
++ Less than -10: the interaction between two drugs is likely to be antagonistic;
++ From -10 to 10: the interaction between two drugs is likely to be additive;
++ Larger than 10: the interaction between two drugs is likely to be synergistic.
+
+* method: Loewe
+
+```{r sfscoreloewe}
+
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'Loewe')
+PlotSynergy(synergy.score, type = "all")
+```
+* method: HSA
+
+```{r sfscoreHSA}
+
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'HSA')
+PlotSynergy(synergy.score, type = "all")
+```
+
+
+* method: Bliss
+
+```{r sfscoreBliss}
+
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'Bliss')
+PlotSynergy(synergy.score, type = "all")
+```
+
+* method: zip
+
+```{r sfscorezip}
+
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'ZIP')
+PlotSynergy(synergy.score, type = "all")
+```
+
+```{r citation, echo=FALSE}
+citation("synergyfinder")
+citation('drc')
+```
+

@@ -1,0 +1,218 @@
+---
+title: "Drug_PA03C"
+author: "Hui Mao"
+date: "5/18/2020"
+output: html_document
+---
+
+```{r library}
+library(MASS)
+library(drc)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(readxl)
+library(synergyfinder)
+```
+
+
+### Input data
+* Dataset: "Isobologram_PA03C.csv", stacked format "SF_R_PA03C.xlsx". 
+
+  + Combine "Isobologram - PA03C + Hesperadin - Experiment 1.csv" and "Isobologram PA03C + Hesperadin - Experiment 2.csv",
+  + Six replicates per condition.
+  + AZD2014 (2 levels): 0 (N) and 200 (Y).
+  + Hesperadin (6 levels):  0, 20, 50, 100, 500 and 2000.
+ 
+
+```{r data, echo=FALSE}
+SFPA03C <- read_excel("SF_R_PA03C.xlsx")
+#SFPA03C$response[SFPA03C$response>100] <- 100
+head(SFPA03C)   
+dim(SFPA03C) 
+
+x <- read.csv("Isobologram_PA03C.csv", header = TRUE)
+x <- x[,1:7]
+x[,4:7] <- x[, 4:7] * 100
+
+combination.vib <- x[x[, 2] != 0 & x[,3] != 0, 7]
+
+#A1: Hesperadin 
+A1.vib <- c(as.numeric(unlist(x[x[,2] == 0, 4])), 
+            as.numeric(unlist(x[x[,2] == 0, 5])), 
+            as.numeric(unlist(x[x[,2] == 0, 6])))/100
+#A1.vib[A1.vib >1] <- 1
+A1.conc <- rep(as.numeric(as.character(unlist(x[x[,2] == 0, 3]))), 3)
+#A2: AZD2014
+A2.vib <- c(as.numeric(unlist(x[x[,3] == 0, 4])), 
+             as.numeric(unlist(x[x[,3] == 0, 5])), 
+             as.numeric(unlist(x[x[,3] == 0, 6])))/100
+ 
+#A2.vib[A2.vib > 1] <- 1
+A2.conc <- rep(as.numeric(as.character(unlist(x[x[,3] == 0, 2]))), 3)
+```
+
+### Exploratory data analysis
+
+* Explore single drug by itself, without the combination of two drugs.
+
+  + Hesperadin: fit with log-logistic model, which is the most common one of drug response analysis. 
+  + AZD2014: only two dose 0 and 200, can't fit a drug response model.
+ 
+```{r singledrug, echo=FALSE}
+#A1: Hesperadin single drug
+H.m0<- drm(A1.vib ~ A1.conc, fct = LL.4(names = c("Slope", "Lower Limit", "Upper Limit", "ED50")))
+summary(H.m0)
+ED(H.m0, c(30,40,50), interval = "delta")
+plot(H.m0, bp=1, ylab="Response",
+    xlab="Dose of Hesperadin", bty="l", type = "all", xlim = c(0, 5000 ), ylim = c(-0.1, 1))
+
+#A2: AZD2014 single drug
+dt <- data.frame(A2.vib, AZD2014_dose=A2.conc)
+grp <- group_by(dt, AZD2014_dose)
+summarise(grp, mean=mean(A2.vib), sd=sd(A2.vib))
+plot(A2.conc, A2.vib)
+
+```
+
+### Two-drug dose response
+
+#### Fit dose response curves
+As drug AZD2014 only has two levels (0 and 200), I assigned it as a categorical variable with two group: N (does 0, without effect of AZD2014) and Y (dose 200, with the effect of AZD2014).
+
+* There is a significant difference between with and without AZD2014 effect. (by the test for significance of treatment: anova(HA.m1, HA.m2) )
+
+* Use the fit to calculate the selectivity factor at absoluty inhibition level (30%, 40% and 50%). As the Upper and Lower Limits are not similar in with and without AZS2014 effect, I choose the absoluty value instead of ED50 to compare the difference.
+
+```{r twodrug}
+
+# HA.m1 the first model with AZD2014 treatment as an effect 
+HA.m1 <-drm(response~conc_c, AZD2014, data = SFPA03C,fct = LL.4(names = c("Slope", "Lower Limit", "Upper Limit", "ED50")))
+
+plot(HA.m1, broken=TRUE, bp=.1, bty="l",
+     ylab="Response",
+     xlab="Dose of Hesperadin")
+
+# HA.m2 the second model that looks at the whole complete model without AZD2014 treatment.
+HA.m2 <-drm(response~conc_c, data = SFPA03C,fct = LL.4(names = c("Slope", "Lower Limit", "Upper Limit", "ED50")))
+
+#plot together
+par(mfrow=c(1,1), mar=c(3.2,3.2,.5,.5), mgp=c(2,.7,0))
+plot(HA.m1, broken=TRUE, bty="l",  ylab="Response", xlab="Dose of Hesperadin")
+plot(HA.m2, col="red", broken=TRUE, add=TRUE, legend=FALSE)
+legend(740,89, legend="ALL",col="red",lty=1, box.lty=0, bg="transparent")
+
+#A test for  significance of treatment (if it is a significant effect).
+anova(HA.m1, HA.m2) 
+
+# use absoluty value
+ED(HA.m1, c(30,40,50), type="absolute", interval="delta")
+EDcomp(HA.m1, c(30,30), type="absolute",interval="delta")
+EDcomp(HA.m1, c(40,40), type="absolute",interval="delta")
+EDcomp(HA.m1, c(50,50), type="absolute",interval="delta")
+par(mfrow = c(1, 1), mar=c(3.2,3.2,.5,.5), mgp=c(2,.7,0))
+
+#plot an example of absoluty vaule of 50% inhibition.
+plot(HA.m1, broken=TRUE, bp=.1, bty="l",
+      ylab="Response",
+     xlab="Dose of Hesperadin")
+arrows(  0.1, 50, 56.4603, 50, code=0, lty=1, col="red")
+arrows(56.4603 , 50, 56.4603,0, code=0, lty=1, col="red")
+arrows(14.3058 , 50, 14.3058, 0, code=0, lty=2, col="red")
+
+
+```
+
+
+#### 2*2 factor anova analysis
+
+ANOVA and T-tests can also test the significance.If a violation occurs, you can try the non-parametric test. I did not explore here.
+
+```{r anova}
+res.aov3 <- aov(response ~ conc_c + AZD2014, data = SFPA03C)
+summary(res.aov3)
+TukeyHSD(res.aov3, which = "AZD2014")
+plot(res.aov3, 2)
+
+library("ggpubr")
+ggboxplot(SFPA03C, x = "conc_c", y = "response", color = "AZD2014",
+          palette = c("#00AFBB", "#E7B800"))
+
+```
+
+
+### Drug synergy scoring
+
+
+Given a reference model specified by the ‘Method’ parameter, an overall synergy score is calculated as the deviation of phenotypic responses compared to the expected values, averaged over the full dose–response matrix. 
+
+We can try 5 different methods including: 
+
+*  Chou-Talalay method: CI with one isobologram.
+*  Loewe: the synergy score quantifies the excess over the expected response if the two drugs are the same compound.
+*  HSA: the synergy score quantifies the excess over the highest single drug response.
+*  Bliss: the expected response is a multiplicative effect as if the two drugs act independently.
+*  ZIP: Zero interaction potency model, the expected response corresponds to an additive effect as if the two drugs do not affect the potency of each other.
+
+
+The synergy score for a drug combination is averaged over all the dose combination measurments.
+synergy maps highlight synergistic and antagonistic dose regions in red and green colors, respectively.
+
++ Less than -10: the interaction between two drugs is likely to be antagonistic;
++ From -10 to 10: the interaction between two drugs is likely to be additive;
++ Larger than 10: the interaction between two drugs is likely to be synergistic.
+
+
+However for this dataset, the AZD2014 only has two level, convergence failed.  The model was not fitted!
+Althought there are synergy score generated, it is definitly violated assumption and there is a warning as following:
+
+>Warning!
+One of the input drugs has three or less doses measured. Therefore, only Bliss and HSA synergy scores can be calculated, since Loewe and ZIP models require multiple doses for fitting dose-response curves of each drug in the combination. Additionaly, the correction parameter was disabled, which also requires dose-response fitting.
+
+* __Recommendation__
+Add several doses for AZD2014 in each group (recommend at least 5 doses) to calculate synergy score.
+
+
+* method: Loewe
+
+```{r sfscoreloewe}
+source("Reshape.R")
+dose.response.mat <- mReshapeData(SFPA03C,
+                                 data.type = "viability",
+                                 impute = TRUE,
+                                 noise = TRUE,
+                                 correction = "part")
+
+str(dose.response.mat)
+PlotDoseResponse(dose.response.mat)
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'Loewe')
+PlotSynergy(synergy.score, type = "all")
+```
+* method: HSA
+
+```{r sfscoreHSA}
+
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'HSA')
+PlotSynergy(synergy.score, type = "all")
+```
+
+
+* method: Bliss
+
+```{r sfscoreBliss}
+
+synergy.score <- CalculateSynergy(data = dose.response.mat,
+                                  method = 'Bliss')
+PlotSynergy(synergy.score, type = "all")
+```
+
+
+
+```{r citation, echo=FALSE}
+citation("synergyfinder")
+citation('drc')
+```
+
+
